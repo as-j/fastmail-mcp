@@ -8,8 +8,19 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { FastmailAuth, FastmailConfig } from './auth.js';
-import { JmapClient } from './jmap-client.js';
+import { JmapClient, EmailAddress } from './jmap-client.js';
 import { ContactsCalendarClient } from './contacts-calendar.js';
+
+function normalizeAddresses(addrs: unknown): EmailAddress[] {
+  if (!Array.isArray(addrs)) return [];
+  return addrs.map(addr => {
+    if (typeof addr === 'string') return { email: addr };
+    if (addr && typeof addr === 'object' && 'email' in addr) {
+      return { email: (addr as any).email, name: (addr as any).name ?? null };
+    }
+    throw new Error(`Invalid address format: ${JSON.stringify(addr)}`);
+  });
+}
 
 const server = new Server(
   {
@@ -183,18 +194,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             to: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'Recipient email addresses',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'Recipient addresses as [{email, name?}] objects',
             },
             cc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'CC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'CC addresses (optional)',
             },
             bcc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'BCC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'BCC addresses (optional)',
             },
             from: {
               type: 'string',
@@ -242,18 +253,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             to: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'Recipient email addresses (optional, defaults to the original sender)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'Recipient addresses as [{email, name?}] objects (optional, defaults to original sender)',
             },
             cc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'CC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'CC addresses (optional)',
             },
             bcc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'BCC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'BCC addresses (optional)',
             },
             from: {
               type: 'string',
@@ -279,18 +290,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             to: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'Recipient email addresses',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'Recipient addresses as [{email, name?}] objects',
             },
             cc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'CC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'CC addresses (optional)',
             },
             bcc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'BCC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'BCC addresses (optional)',
             },
             from: {
               type: 'string',
@@ -330,18 +341,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             to: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'Recipient email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'Recipient addresses as [{email, name?}] objects (optional)',
             },
             cc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'CC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'CC addresses (optional)',
             },
             bcc: {
               type: 'array',
-              items: { type: 'string' },
-              description: 'BCC email addresses (optional)',
+              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              description: 'BCC addresses (optional)',
             },
             from: {
               type: 'string',
@@ -941,9 +952,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const submissionId = await client.sendEmail({
-          to,
-          cc,
-          bcc,
+          to: normalizeAddresses(to),
+          cc: cc ? normalizeAddresses(cc) : undefined,
+          bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
           mailboxId,
           subject,
@@ -995,8 +1006,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Default recipients to the original sender
         const replyTo = (to && Array.isArray(to) && to.length > 0)
-          ? to
-          : originalEmail.from?.map((addr: any) => addr.email).filter(Boolean) || [];
+          ? normalizeAddresses(to)
+          : (originalEmail.from?.map((addr: any) => ({ email: addr.email, name: addr.name ?? null })).filter((a: any) => a.email) || []);
 
         if (replyTo.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'Could not determine reply recipient. Please provide "to" explicitly.');
@@ -1004,8 +1015,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         const submissionId = await client.sendEmail({
           to: replyTo,
-          cc,
-          bcc,
+          cc: cc ? normalizeAddresses(cc) : undefined,
+          bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
           subject: replySubject,
           textBody,
@@ -1037,9 +1048,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const draftId = await client.saveDraft({
-          to,
-          cc,
-          bcc,
+          to: normalizeAddresses(to),
+          cc: cc ? normalizeAddresses(cc) : undefined,
+          bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
           subject,
           textBody,
@@ -1066,9 +1077,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const emailId = await client.createDraft({
-          to,
-          cc,
-          bcc,
+          to: to ? normalizeAddresses(to) : undefined,
+          cc: cc ? normalizeAddresses(cc) : undefined,
+          bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
           mailboxId,
           subject,

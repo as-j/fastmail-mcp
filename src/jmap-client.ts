@@ -10,6 +10,11 @@ export interface JmapSession {
   uploadUrl?: string;
 }
 
+export interface EmailAddress {
+  email: string;
+  name?: string | null;
+}
+
 export interface JmapRequest {
   using: string[];
   methodCalls: [string, any, string][];
@@ -211,9 +216,9 @@ export class JmapClient {
   }
 
   async sendEmail(email: {
-    to: string[];
-    cc?: string[];
-    bcc?: string[];
+    to: EmailAddress[];
+    cc?: EmailAddress[];
+    bcc?: EmailAddress[];
     subject: string;
     textBody?: string;
     htmlBody?: string;
@@ -277,9 +282,9 @@ export class JmapClient {
       mailboxIds: initialMailboxIds,
       keywords: { $draft: true },
       from: [{ name: selectedIdentity.name, email: fromEmail }],
-      to: email.to.map(addr => ({ email: addr })),
-      cc: email.cc?.map(addr => ({ email: addr })) || [],
-      bcc: email.bcc?.map(addr => ({ email: addr })) || [],
+      to: email.to,
+      cc: email.cc || [],
+      bcc: email.bcc || [],
       subject: email.subject,
       ...(email.inReplyTo && { inReplyTo: email.inReplyTo }),
       ...(email.references && { references: email.references }),
@@ -306,7 +311,7 @@ export class JmapClient {
               identityId: selectedIdentity.id,
               envelope: {
                 mailFrom: { email: fromEmail },
-                rcptTo: email.to.map(addr => ({ email: addr }))
+                rcptTo: email.to.map(addr => ({ email: addr.email }))
               }
             }
           },
@@ -348,9 +353,9 @@ export class JmapClient {
   }
 
   async createDraft(email: {
-    to?: string[];
-    cc?: string[];
-    bcc?: string[];
+    to?: EmailAddress[];
+    cc?: EmailAddress[];
+    bcc?: EmailAddress[];
     subject?: string;
     textBody?: string;
     htmlBody?: string;
@@ -406,9 +411,9 @@ export class JmapClient {
       from: [{ email: fromEmail }],
     };
 
-    if (email.to?.length) emailObject.to = email.to.map(addr => ({ email: addr }));
-    if (email.cc?.length) emailObject.cc = email.cc.map(addr => ({ email: addr }));
-    if (email.bcc?.length) emailObject.bcc = email.bcc.map(addr => ({ email: addr }));
+    if (email.to?.length) emailObject.to = email.to;
+    if (email.cc?.length) emailObject.cc = email.cc;
+    if (email.bcc?.length) emailObject.bcc = email.bcc;
     if (email.subject) emailObject.subject = email.subject;
     if (email.textBody) emailObject.textBody = [{ partId: 'text', type: 'text/plain' }];
     if (email.htmlBody) emailObject.htmlBody = [{ partId: 'html', type: 'text/html' }];
@@ -449,9 +454,9 @@ export class JmapClient {
   }
 
   async saveDraft(email: {
-    to: string[];
-    cc?: string[];
-    bcc?: string[];
+    to: EmailAddress[];
+    cc?: EmailAddress[];
+    bcc?: EmailAddress[];
     subject: string;
     textBody?: string;
     htmlBody?: string;
@@ -502,9 +507,9 @@ export class JmapClient {
       mailboxIds,
       keywords: { $draft: true },
       from: [{ email: fromEmail }],
-      to: email.to.map(addr => ({ email: addr })),
-      cc: email.cc?.map(addr => ({ email: addr })) || [],
-      bcc: email.bcc?.map(addr => ({ email: addr })) || [],
+      to: email.to,
+      cc: email.cc || [],
+      bcc: email.bcc || [],
       subject: email.subject,
       ...(email.inReplyTo && { inReplyTo: email.inReplyTo }),
       ...(email.references && { references: email.references }),
