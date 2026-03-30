@@ -12,20 +12,62 @@ import { JmapClient, EmailAddress } from './jmap-client.js';
 import { ContactsCalendarClient } from './contacts-calendar.js';
 
 function normalizeAddresses(addrs: unknown): EmailAddress[] {
-  if (!Array.isArray(addrs)) return [];
-  return addrs.map(addr => {
+  // Handle JSON-encoded string (e.g. '["a@b.com"]' or '[{"email":"a@b.com"}]')
+  let resolved: unknown = addrs;
+  if (typeof resolved === 'string') {
+    try {
+      resolved = JSON.parse(resolved);
+    } catch {
+      // Treat as single email address or comma-separated list
+      return (resolved as string).split(',').map((s: string) => ({ email: s.trim() })).filter((a: { email: string }) => a.email);
+    }
+  }
+  if (!Array.isArray(resolved)) return [];
+  return resolved.map((addr: unknown) => {
     if (typeof addr === 'string') return { email: addr };
     if (addr && typeof addr === 'object' && 'email' in addr) {
-      return { email: (addr as any).email, name: (addr as any).name ?? null };
+      return { email: (addr as Record<string, unknown>).email as string, name: ((addr as Record<string, unknown>).name ?? null) as string | null };
     }
     throw new Error(`Invalid address format: ${JSON.stringify(addr)}`);
   });
 }
 
+function normalizeStringArray(val: unknown): string[] {
+  if (typeof val === 'string') {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch {
+      // treat as single value
+    }
+    return val.trim() ? [val.trim()] : [];
+  }
+  if (Array.isArray(val)) return val.map(String);
+  return [];
+}
+
+// Coerce args sent as JSON-encoded strings (e.g. from Claude.ai web UI) to proper types.
+function coerceArgs(args: unknown): Record<string, unknown> {
+  if (!args || typeof args !== 'object') return {};
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    if (typeof value === 'string') {
+      try {
+        result[key] = JSON.parse(value);
+      } catch {
+        result[key] = value;
+      }
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 const server = new Server(
   {
     name: 'fastmail-mcp',
-    version: '1.7.1',
+    version: '1.8.0',
   },
   {
     capabilities: {
@@ -165,7 +207,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the mailbox to list emails from (optional, defaults to all)',
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum number of emails to return (default: 20)',
               default: 20,
             },
@@ -193,18 +235,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             to: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'Recipient addresses as [{email, name?}] objects',
             },
             cc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'CC addresses (optional)',
             },
             bcc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'BCC addresses (optional)',
             },
             from: {
@@ -228,13 +267,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'HTML body (optional)',
             },
             inReplyTo: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Message-ID(s) of the email being replied to (optional, for threading)',
             },
             references: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Full reference chain of Message-IDs (optional, for threading)',
             },
           },
@@ -252,18 +289,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the email to reply to',
             },
             to: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'Recipient addresses as [{email, name?}] objects (optional, defaults to original sender)',
             },
             cc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'CC addresses (optional)',
             },
             bcc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'BCC addresses (optional)',
             },
             from: {
@@ -289,18 +323,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             to: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'Recipient addresses as [{email, name?}] objects',
             },
             cc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'CC addresses (optional)',
             },
             bcc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'BCC addresses (optional)',
             },
             from: {
@@ -320,13 +351,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'HTML body (optional)',
             },
             inReplyTo: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Message-IDs to reply to (optional, for threading)',
             },
             references: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Message-IDs for References header (optional, for threading)',
             },
           },
@@ -340,18 +369,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             to: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'Recipient addresses as [{email, name?}] objects (optional)',
             },
             cc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'CC addresses (optional)',
             },
             bcc: {
-              type: 'array',
-              items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
               description: 'BCC addresses (optional)',
             },
             from: {
@@ -388,7 +414,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Search query string',
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum number of results (default: 20)',
               default: 20,
             },
@@ -403,7 +429,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum number of contacts to return (default: 50)',
               default: 50,
             },
@@ -435,7 +461,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Search query string',
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum number of results (default: 20)',
               default: 20,
             },
@@ -462,7 +488,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the calendar (optional, defaults to all calendars)',
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum number of events to return (default: 50)',
               default: 50,
             },
@@ -514,14 +540,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Event location (optional)',
             },
             participants: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  email: { type: 'string' },
-                  name: { type: 'string' }
-                }
-              },
+              anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } } } }, { type: 'string' }],
               description: 'Event participants (optional)',
             },
           },
@@ -543,7 +562,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Number of recent emails to retrieve (default: 10, max: 50)',
               default: 10,
             },
@@ -566,7 +585,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the email to mark',
             },
             read: {
-              type: 'boolean',
+              anyOf: [{ type: 'boolean' }, { type: 'string' }],
               description: 'true to mark as read, false to mark as unread',
               default: true,
             },
@@ -617,8 +636,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the email to add labels to',
             },
             mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of mailbox IDs to add as labels',
             },
           },
@@ -636,8 +654,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'ID of the email to remove labels from',
             },
             mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of mailbox IDs to remove as labels',
             },
           },
@@ -703,11 +720,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Filter by subject',
             },
             hasAttachment: {
-              type: 'boolean',
+              anyOf: [{ type: 'boolean' }, { type: 'string' }],
               description: 'Filter emails with attachments',
             },
             isUnread: {
-              type: 'boolean',
+              anyOf: [{ type: 'boolean' }, { type: 'string' }],
               description: 'Filter unread emails',
             },
             mailboxId: {
@@ -723,7 +740,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Emails before this date (ISO 8601)',
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Maximum results (default: 50)',
               default: 50,
             },
@@ -772,12 +789,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             emailIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of email IDs to mark',
             },
             read: {
-              type: 'boolean',
+              anyOf: [{ type: 'boolean' }, { type: 'string' }],
               description: 'true to mark as read, false as unread',
               default: true,
             },
@@ -792,8 +808,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             emailIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of email IDs to move',
             },
             targetMailboxId: {
@@ -811,8 +826,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             emailIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of email IDs to delete',
             },
           },
@@ -826,13 +840,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             emailIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of email IDs to add labels to',
             },
             mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of mailbox IDs to add as labels',
             },
           },
@@ -846,13 +858,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             emailIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of email IDs to remove labels from',
             },
             mailboxIds: {
-              type: 'array',
-              items: { type: 'string' },
+              anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
               description: 'Array of mailbox IDs to remove as labels',
             },
           },
@@ -874,12 +884,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           type: 'object',
           properties: {
             dryRun: {
-              type: 'boolean',
+              anyOf: [{ type: 'boolean' }, { type: 'string' }],
               description: 'If true, only shows what would be done without making changes (default: true)',
               default: true,
             },
             limit: {
-              type: 'number',
+              anyOf: [{ type: 'number' }, { type: 'string' }],
               description: 'Number of emails to test with (default: 3, max: 10)',
               default: 3,
             },
@@ -891,7 +901,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name } = request.params;
+  const args = coerceArgs(request.params.arguments);
 
   try {
 
@@ -941,7 +952,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'send_email': {
         const { to, cc, bcc, from, mailboxId, subject, textBody, htmlBody, inReplyTo, references } = args as any;
-        if (!to || !Array.isArray(to) || to.length === 0) {
+        const toAddrs = normalizeAddresses(to);
+        if (toAddrs.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'to field is required and must be a non-empty array');
         }
         if (!subject) {
@@ -952,7 +964,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const submissionId = await client.sendEmail({
-          to: normalizeAddresses(to),
+          to: toAddrs,
           cc: cc ? normalizeAddresses(cc) : undefined,
           bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
@@ -960,8 +972,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           subject,
           textBody,
           htmlBody,
-          inReplyTo,
-          references,
+          inReplyTo: Array.isArray(inReplyTo) ? inReplyTo : (inReplyTo ? [inReplyTo] : undefined),
+          references: Array.isArray(references) ? references : (references ? [references] : undefined),
         });
 
         return {
@@ -1005,8 +1017,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Default recipients to the original sender
-        const replyTo = (to && Array.isArray(to) && to.length > 0)
-          ? normalizeAddresses(to)
+        const normalizedTo = to ? normalizeAddresses(to) : [];
+        const replyTo = normalizedTo.length > 0
+          ? normalizedTo
           : (originalEmail.from?.map((addr: any) => ({ email: addr.email, name: addr.name ?? null })).filter((a: any) => a.email) || []);
 
         if (replyTo.length === 0) {
@@ -1037,7 +1050,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'save_draft': {
         const { to, cc, bcc, from, subject, textBody, htmlBody, inReplyTo, references } = args as any;
-        if (!to || !Array.isArray(to) || to.length === 0) {
+        const toAddrs = normalizeAddresses(to);
+        if (toAddrs.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'to field is required and must be a non-empty array');
         }
         if (!subject) {
@@ -1048,15 +1062,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const draftId = await client.saveDraft({
-          to: normalizeAddresses(to),
+          to: toAddrs,
           cc: cc ? normalizeAddresses(cc) : undefined,
           bcc: bcc ? normalizeAddresses(bcc) : undefined,
           from,
           subject,
           textBody,
           htmlBody,
-          inReplyTo,
-          references,
+          inReplyTo: Array.isArray(inReplyTo) ? inReplyTo : (inReplyTo ? [inReplyTo] : undefined),
+          references: Array.isArray(references) ? references : (references ? [references] : undefined),
         });
 
         return {
@@ -1310,11 +1324,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'add_labels': {
-        const { emailId, mailboxIds } = args as any;
+        const { emailId, mailboxIds: rawMailboxIds } = args as any;
         if (!emailId) {
           throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
         }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+        const mailboxIds = normalizeStringArray(rawMailboxIds);
+        if (mailboxIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
         }
         const client = initializeClient();
@@ -1330,11 +1345,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'remove_labels': {
-        const { emailId, mailboxIds } = args as any;
+        const { emailId, mailboxIds: rawMailboxIds } = args as any;
         if (!emailId) {
           throw new McpError(ErrorCode.InvalidParams, 'emailId is required');
         }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+        const mailboxIds = normalizeStringArray(rawMailboxIds);
+        if (mailboxIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
         }
         const client = initializeClient();
@@ -1469,8 +1485,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'bulk_mark_read': {
-        const { emailIds, read = true } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+        const { emailIds: rawEmailIds, read = true } = args as any;
+        const emailIds = normalizeStringArray(rawEmailIds);
+        if (emailIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
         }
         const client = initializeClient();
@@ -1486,8 +1503,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'bulk_move': {
-        const { emailIds, targetMailboxId } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+        const { emailIds: rawEmailIdsBM, targetMailboxId } = args as any;
+        const emailIds = normalizeStringArray(rawEmailIdsBM);
+        if (emailIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
         }
         if (!targetMailboxId) {
@@ -1506,8 +1524,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'bulk_delete': {
-        const { emailIds } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+        const { emailIds: rawEmailIdsBD } = args as any;
+        const emailIds = normalizeStringArray(rawEmailIdsBD);
+        if (emailIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
         }
         const client = initializeClient();
@@ -1523,11 +1542,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'bulk_add_labels': {
-        const { emailIds, mailboxIds } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+        const { emailIds: rawEmailIdsBAL, mailboxIds: rawMailboxIdsBAL } = args as any;
+        const emailIds = normalizeStringArray(rawEmailIdsBAL);
+        const mailboxIds = normalizeStringArray(rawMailboxIdsBAL);
+        if (emailIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
         }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+        if (mailboxIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
         }
         const client = initializeClient();
@@ -1543,11 +1564,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'bulk_remove_labels': {
-        const { emailIds, mailboxIds } = args as any;
-        if (!emailIds || !Array.isArray(emailIds) || emailIds.length === 0) {
+        const { emailIds: rawEmailIdsBRL, mailboxIds: rawMailboxIdsBRL } = args as any;
+        const emailIds = normalizeStringArray(rawEmailIdsBRL);
+        const mailboxIds = normalizeStringArray(rawMailboxIdsBRL);
+        if (emailIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'emailIds array is required and must not be empty');
         }
-        if (!mailboxIds || !Array.isArray(mailboxIds) || mailboxIds.length === 0) {
+        if (mailboxIds.length === 0) {
           throw new McpError(ErrorCode.InvalidParams, 'mailboxIds array is required and must not be empty');
         }
         const client = initializeClient();
