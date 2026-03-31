@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
+  isInitializeRequest,
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { FastmailAuth, FastmailConfig } from './auth.js';
 import { JmapClient, EmailAddress } from './jmap-client.js';
 import { ContactsCalendarClient } from './contacts-calendar.js';
@@ -1757,14 +1761,110 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-async function runServer() {
+async function runStdio() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Fastmail MCP server running on stdio');
 }
 
-runServer().catch(() => {
-  // Avoid logging raw error objects to prevent accidental PII leakage
-  console.error('Fastmail MCP server failed to start');
-  process.exit(1);
-});
+async function runHttp(mcpPath: string, port: number) {
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  const httpServer = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+
+    if (url.pathname !== `/${mcpPath}`) {
+      res.writeHead(404).end();
+      return;
+    }
+
+    // Parse body (empty for GET/DELETE)
+    const raw = await new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      req.on('error', reject);
+    });
+    let parsedBody: unknown;
+    try {
+      parsedBody = raw ? JSON.parse(raw) : undefined;
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }));
+      return;
+    }
+
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    try {
+      if (req.method === 'POST') {
+        if (sessionId && transports.has(sessionId)) {
+          await transports.get(sessionId)!.handleRequest(req, res, parsedBody);
+        } else if (!sessionId && isInitializeRequest(parsedBody)) {
+          let transport: StreamableHTTPServerTransport;
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sid) => { transports.set(sid, transport); },
+          });
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid) transports.delete(sid);
+          };
+          await server.connect(transport);
+          await transport.handleRequest(req, res, parsedBody);
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: missing or invalid session' }, id: null }));
+        }
+      } else if (req.method === 'GET' || req.method === 'DELETE') {
+        if (!sessionId || !transports.has(sessionId)) {
+          res.writeHead(400).end('Invalid or missing session ID');
+          return;
+        }
+        await transports.get(sessionId)!.handleRequest(req, res, parsedBody);
+      } else {
+        res.writeHead(405).end('Method Not Allowed');
+      }
+    } catch {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null }));
+      }
+    }
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Fastmail MCP server running on HTTP port ${port} at /${mcpPath}`);
+  });
+
+  const shutdown = async () => {
+    for (const [sid, t] of transports) {
+      try { await t.close(); } catch { /* ignore */ }
+      transports.delete(sid);
+    }
+    httpServer.close(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+// Entry point — stdio if MCP_PATH is unset, HTTP if set
+const mcpPath = process.env.MCP_PATH?.trim();
+const port = parseInt(process.env.PORT ?? '3000', 10);
+
+if (mcpPath) {
+  if (mcpPath.length < 8) {
+    console.error('MCP_PATH must be at least 8 characters');
+    process.exit(1);
+  }
+  runHttp(mcpPath, port).catch(() => {
+    console.error('Fastmail MCP HTTP server failed to start');
+    process.exit(1);
+  });
+} else {
+  runStdio().catch(() => {
+    // Avoid logging raw error objects to prevent accidental PII leakage
+    console.error('Fastmail MCP server failed to start');
+    process.exit(1);
+  });
+}

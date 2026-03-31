@@ -1,0 +1,17 @@
+[Unit]
+Description=Fastmail MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=fastmail-mcp
+WorkingDirectory=/opt/fastmail-mcp
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# Secrets live in this file, not here (chmod 600, owned by root)
+EnvironmentFile=/etc/fastmail-mcp.env
+
+[Install]
+WantedBy=multi-user.target
