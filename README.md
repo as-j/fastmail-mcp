@@ -87,6 +87,33 @@ For development with auto-reload:
 npm run dev
 ```
 
+### Remote HTTP Mode for ChatGPT / Hosted MCP
+
+You can also run the server as a private remote MCP endpoint by setting `MCP_PATH`.
+This mode is intended for a small number of trusted clients that all use the same Fastmail account.
+
+```bash
+export FASTMAIL_API_TOKEN="your_api_token_here"
+export MCP_PATH="replace-with-a-long-random-secret-path"
+export PORT="3000"
+
+# Optional operational limits
+export MCP_MAX_SESSIONS="10"
+export MCP_SESSION_TTL_MS="900000"
+export MCP_REAP_INTERVAL_MS="60000"
+export MCP_MAX_BODY_BYTES="1048576"
+
+npm start
+```
+
+Behavior in HTTP mode:
+- The server is single-tenant: every MCP session uses the same Fastmail token from the environment.
+- ChatGPT-compatible auth is expected to happen at the infrastructure layer, not via OAuth in this server.
+- Do not assume ChatGPT will send arbitrary custom bearer tokens to your MCP endpoint.
+- Protect the endpoint with a high-entropy `MCP_PATH`, and optionally add reverse-proxy controls such as IP allowlists if they fit your deployment.
+- Sessions are isolated in-process, expire after idle timeout, and are capped by `MCP_MAX_SESSIONS`.
+- Oversized bodies are rejected and invalid session requests return structured JSON-RPC errors.
+
 ### Run via npx (GitHub)
 
 Default to `main` branch:
@@ -247,7 +274,9 @@ Fastmail applies rate limits to API requests. The server handles standard rate l
 ### Project Structure
 ```
 src/
-├── index.ts              # Main MCP server implementation
+├── index.ts              # Startup entrypoint (stdio or HTTP mode)
+├── mcp-server.ts         # MCP server factory and tool handlers
+├── http-server.ts        # Streamable HTTP session management and limits
 ├── auth.ts              # Authentication handling
 ├── jmap-client.ts       # JMAP client wrapper
 └── contacts-calendar.ts # Contacts and calendar extensions
@@ -283,6 +312,8 @@ Contributions are welcome! Please ensure that:
 2. **Missing Dependencies**: Run `npm install` to ensure all dependencies are installed  
 3. **Build Errors**: Check that TypeScript compilation completes without errors using `npm run build`
 4. **Calendar/Contacts "Forbidden" Errors**: Use `check_function_availability` to see setup guidance
+5. **HTTP Session Errors**: Verify that the client is sending the `mcp-session-id` header after initialization and that the server has not expired the session due to idle timeout
+6. **Too Many Concurrent Clients**: Increase `MCP_MAX_SESSIONS` or wait for idle sessions to expire if the server returns "maximum concurrent MCP sessions reached"
 
 ### Email Tools Failing with Serialization Errors?
 
@@ -312,3 +343,5 @@ For more detailed error information, check the console output when running the s
 - The server avoids logging raw errors and sensitive data (tokens, email addresses, identities, attachment names/blobIds) in error messages.
 - Tool responses may include your email metadata/content by design (e.g., listing emails) but internal identifiers and credentials are not disclosed beyond what Fastmail returns for the requested data.
 - If you encounter errors, messages are sanitized and summarized to prevent leaking personal information.
+- In remote HTTP mode, this server is designed for a single shared Fastmail account, not for multi-tenant per-user isolation.
+- Remote HTTP mode does not implement OAuth and does not rely on custom bearer-token auth from ChatGPT; secure it with a secret path and network/proxy controls appropriate for your deployment.
