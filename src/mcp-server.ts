@@ -121,24 +121,32 @@ function resolveFastmailConfig(env: NodeJS.ProcessEnv): FastmailConfig {
 }
 
 export class FastmailClientContext implements McpClientContext {
-  private readonly config: FastmailConfig;
+  private readonly env: NodeJS.ProcessEnv;
+  private config: FastmailConfig | null = null;
   private jmapClient: JmapClient | null = null;
   private contactsCalendarClient: ContactsCalendarClient | null = null;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
-    this.config = resolveFastmailConfig(env);
+    this.env = env;
+  }
+
+  private getConfig(): FastmailConfig {
+    if (!this.config) {
+      this.config = resolveFastmailConfig(this.env);
+    }
+    return this.config;
   }
 
   getMailClient(): JmapClient {
     if (!this.jmapClient) {
-      this.jmapClient = new JmapClient(new FastmailAuth(this.config));
+      this.jmapClient = new JmapClient(new FastmailAuth(this.getConfig()));
     }
     return this.jmapClient;
   }
 
   getContactsCalendarClient(): ContactsCalendarClient {
     if (!this.contactsCalendarClient) {
-      this.contactsCalendarClient = new ContactsCalendarClient(new FastmailAuth(this.config));
+      this.contactsCalendarClient = new ContactsCalendarClient(new FastmailAuth(this.getConfig()));
     }
     return this.contactsCalendarClient;
   }

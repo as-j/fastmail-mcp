@@ -102,8 +102,7 @@ describe('createHttpRequestHandler', () => {
     mock.restoreAll();
   });
 
-  it('routes multiple clients to distinct sessions and preserves live sessions after one closes', async () => {
-    let sessionCounter = 0;
+  it('handles repeated sessionless initialize requests without consuming session slots', async () => {
     const { handler, sessionManager } = createHttpRequestHandler({
       mcpPath: 'supersecretpath',
       port: 0,
@@ -111,10 +110,6 @@ describe('createHttpRequestHandler', () => {
       idleTtlMs: 60_000,
       reapIntervalMs: 60_000,
       maxBodyBytes: 1024,
-      sessionFactory: async () => {
-        sessionCounter += 1;
-        return createFakeSession(`sid-${sessionCounter}`, `session-${sessionCounter}`);
-      },
       logger: () => undefined,
     });
     const server = await startServer(handler);
@@ -127,25 +122,51 @@ describe('createHttpRequestHandler', () => {
       params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
     });
 
-    const initOne = await fetch(baseUrl, { method: 'POST', body: initializeBody, headers: { 'Content-Type': 'application/json' } });
-    const sessionOne = initOne.headers.get('mcp-session-id');
-    assert.equal(sessionOne, 'sid-1');
+    const initOne = await fetch(baseUrl, { method: 'POST', body: initializeBody, headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' } });
+    assert.equal(initOne.status, 200);
+    assert.equal(initOne.headers.get('mcp-session-id'), null);
+    assert.equal(sessionManager.size(), 0);
 
-    const initTwo = await fetch(baseUrl, { method: 'POST', body: initializeBody, headers: { 'Content-Type': 'application/json' } });
-    const sessionTwo = initTwo.headers.get('mcp-session-id');
-    assert.equal(sessionTwo, 'sid-2');
-
-    const callOne = await fetch(baseUrl, { method: 'POST', headers: { 'mcp-session-id': sessionOne! } });
-    assert.deepEqual(await callOne.json(), { label: 'session-1' });
-
-    const closeOne = sessionManager.get(sessionOne!);
-    await sessionManager.closeSession(closeOne!);
-
-    const callTwo = await fetch(baseUrl, { method: 'POST', headers: { 'mcp-session-id': sessionTwo! } });
-    assert.deepEqual(await callTwo.json(), { label: 'session-2' });
+    const initTwo = await fetch(baseUrl, { method: 'POST', body: initializeBody, headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' } });
+    assert.equal(initTwo.status, 200);
+    assert.equal(initTwo.headers.get('mcp-session-id'), null);
+    assert.equal(sessionManager.size(), 0);
   });
 
-  it('returns JSON-RPC errors for invalid sessions, oversized bodies, and capacity limits', async () => {
+  it('supports sessionless tools/list after sessionless initialize', async () => {
+    const { handler } = createHttpRequestHandler({
+      mcpPath: 'supersecretpath',
+      port: 0,
+      maxSessions: 1,
+      idleTtlMs: 60_000,
+      reapIntervalMs: 60_000,
+      maxBodyBytes: 2048,
+      logger: () => undefined,
+    });
+    const server = await startServer(handler);
+    servers.push(server);
+    const baseUrl = `http://127.0.0.1:${server.port}/supersecretpath`;
+
+    const initializeBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+    });
+    const init = await fetch(baseUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' }, body: initializeBody });
+    assert.equal(init.status, 200);
+
+    const toolsList = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    });
+    assert.equal(toolsList.status, 200);
+    const toolsListJson = await toolsList.json() as { result?: { tools?: unknown[] } };
+    assert.ok(Array.isArray(toolsListJson.result?.tools));
+  });
+
+  it('returns JSON-RPC errors for invalid sessions and oversized bodies', async () => {
     const { handler } = createHttpRequestHandler({
       mcpPath: 'supersecretpath',
       port: 0,
@@ -153,36 +174,52 @@ describe('createHttpRequestHandler', () => {
       idleTtlMs: 60_000,
       reapIntervalMs: 60_000,
       maxBodyBytes: 256,
-      sessionFactory: async () => createFakeSession('sid-1', 'session-1'),
       logger: () => undefined,
     });
     const server = await startServer(handler);
     servers.push(server);
     const baseUrl = `http://127.0.0.1:${server.port}/supersecretpath`;
 
-    const missing = await fetch(baseUrl, { method: 'POST' });
-    assert.equal(missing.status, 400);
-    assert.equal((await missing.json()).error.message, 'Bad Request: missing or invalid session');
+    const invalidSession = await fetch(baseUrl, { method: 'POST', headers: { 'mcp-session-id': 'missing-session' } });
+    assert.equal(invalidSession.status, 400);
+    assert.equal((await invalidSession.json()).error.message, 'Bad Request: missing or invalid session');
 
     const oversized = await fetch(baseUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
       body: JSON.stringify({ payload: 'x'.repeat(1000) }),
     });
     assert.equal(oversized.status, 413);
+  });
 
-    const initializeBody = JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1.0.0' } },
+  it('preserves explicit stateful sessions when a valid session id is supplied', async () => {
+    const { handler, sessionManager } = createHttpRequestHandler({
+      mcpPath: 'supersecretpath',
+      port: 0,
+      maxSessions: 2,
+      idleTtlMs: 60_000,
+      reapIntervalMs: 60_000,
+      maxBodyBytes: 1024,
+      logger: () => undefined,
     });
-    const first = await fetch(baseUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: initializeBody });
-    assert.equal(first.status, 200);
+    const firstSession = createFakeSession('sid-1', 'session-1');
+    firstSession.reserved = false;
+    const secondSession = createFakeSession('sid-2', 'session-2');
+    secondSession.reserved = false;
+    sessionManager.register('sid-1', firstSession);
+    sessionManager.register('sid-2', secondSession);
 
-    const second = await fetch(baseUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: initializeBody });
-    assert.equal(second.status, 503);
-    assert.equal((await second.json()).error.message, 'Server busy: maximum concurrent MCP sessions reached');
+    const server = await startServer(handler);
+    servers.push(server);
+    const baseUrl = `http://127.0.0.1:${server.port}/supersecretpath`;
+
+    const callOne = await fetch(baseUrl, { method: 'POST', headers: { 'mcp-session-id': 'sid-1' } });
+    assert.deepEqual(await callOne.json(), { label: 'session-1' });
+
+    await sessionManager.closeSession(firstSession);
+
+    const callTwo = await fetch(baseUrl, { method: 'POST', headers: { 'mcp-session-id': 'sid-2' } });
+    assert.deepEqual(await callTwo.json(), { label: 'session-2' });
   });
 
   it('expires idle sessions during reap', async () => {

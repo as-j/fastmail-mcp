@@ -198,6 +198,35 @@ async function createDefaultSession(env: NodeJS.ProcessEnv = process.env): Promi
   };
 }
 
+async function handleStatelessPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  parsedBody: unknown,
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<void> {
+  const context = createRuntimeContext(env ?? process.env);
+  const server = createMcpServer(context);
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  await server.connect(transport);
+
+  try {
+    if (!isInitializeRequest(parsedBody)) {
+      const internalTransport = (transport as unknown as {
+        _webStandardTransport?: { _initialized?: boolean };
+      })._webStandardTransport;
+      if (internalTransport) {
+        internalTransport._initialized = true;
+      }
+    }
+    await transport.handleRequest(req, res, parsedBody);
+  } finally {
+    await server.close().catch(() => undefined);
+  }
+}
+
 export function createHttpRequestHandler(
   options: HttpRuntimeOptions,
 ): { handler: RequestListener; sessionManager: HttpSessionManager } {
@@ -249,51 +278,12 @@ export function createHttpRequestHandler(
         return;
       }
 
-      if (req.method !== 'POST' || !isInitializeRequest(parsedBody)) {
-        sendJson(res, 400, jsonRpcError(-32000, 'Bad Request: missing or invalid session'));
+      if (req.method === 'POST') {
+        await handleStatelessPost(req, res, parsedBody, options.env);
         return;
       }
-
-      if (!sessionManager.tryReserve()) {
-        logger(`Rejected initialize: session limit reached (${options.maxSessions})`);
-        sendJson(res, 503, jsonRpcError(-32003, 'Server busy: maximum concurrent MCP sessions reached'));
-        return;
-      }
-
-      const session = await sessionFactory();
-      const originalOnClose = session.transport.onclose;
-      session.transport.onclose = () => {
-        originalOnClose?.();
-        void sessionManager.closeSession(session);
-      };
-
-      if (session.transport instanceof StreamableHTTPServerTransport) {
-        const originalHandleRequest = session.transport.handleRequest.bind(session.transport);
-        session.transport.handleRequest = async (request, response, body) => {
-          const before = session.transport.sessionId;
-          await originalHandleRequest(request, response, body);
-          const after = session.transport.sessionId;
-          if (!before && after && !session.id) {
-            sessionManager.register(after, session);
-            logger(`Initialized MCP session ${maskSessionId(after)} (${sessionManager.size()} active)`);
-          }
-        };
-      }
-
-      try {
-        await session.transport.handleRequest(req, res, parsedBody);
-        const assignedSessionId = session.id ?? session.transport.sessionId;
-        if (assignedSessionId && !sessionManager.get(assignedSessionId)) {
-          sessionManager.register(assignedSessionId, session);
-          logger(`Initialized MCP session ${maskSessionId(assignedSessionId)} (${sessionManager.size()} active)`);
-        } else if (!assignedSessionId) {
-          sessionManager.releaseReservation();
-        }
-      } catch (error) {
-        sessionManager.releaseReservation();
-        await session.server.close().catch(() => undefined);
-        throw error;
-      }
+      sendJson(res, 400, jsonRpcError(-32000, 'Bad Request: missing or invalid session'));
+      return;
     } catch {
       if (!res.headersSent) {
         sendJson(res, 500, jsonRpcError(-32603, 'Internal server error'));
