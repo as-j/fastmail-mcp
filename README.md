@@ -1,6 +1,8 @@
 # Fastmail MCP Server
 
-A Model Context Protocol (MCP) server that provides access to the Fastmail API, enabling AI assistants to interact with email, contacts, and calendar data.
+A Model Context Protocol (MCP) server for Fastmail email, enabling AI assistants to read inbox mail, search messages, page through large result sets, send and reply to email, and manage drafts.
+
+Tool descriptions are written as routing hints for MCP clients, so prompts like "check email", "read my inbox", "reply to this email", and "save a draft" map more reliably to the right Fastmail tools.
 
 ## Features
 
@@ -19,16 +21,6 @@ A Model Context Protocol (MCP) server that provides access to the Fastmail API, 
 - **Advanced Search**: Multi-criteria filtering (sender, date range, attachments, read status)
 - **Bulk Operations**: Process multiple emails simultaneously
 - **Statistics & Analytics**: Account summaries and mailbox statistics
-
-### Contacts Operations
-- List all contacts with full contact information
-- Get specific contacts by ID
-- Search contacts by name or email
-
-### Calendar Operations
-- List all calendars and calendar events
-- Get specific calendar events by ID
-- Create new calendar events with participants and details
 
 ### Label vs Move Operations
 - **move_email/bulk_move**: Replaces ALL mailboxes for an email (folder behavior)
@@ -108,10 +100,11 @@ npm start
 
 Behavior in HTTP mode:
 - The server is single-tenant: every MCP session uses the same Fastmail token from the environment.
+- Stateless sessionless `POST` requests are the default hosted path; most remote MCP clients do not need to send `mcp-session-id`.
 - ChatGPT-compatible auth is expected to happen at the infrastructure layer, not via OAuth in this server.
 - Do not assume ChatGPT will send arbitrary custom bearer tokens to your MCP endpoint.
 - Protect the endpoint with a high-entropy `MCP_PATH`, and optionally add reverse-proxy controls such as IP allowlists if they fit your deployment.
-- Sessions are isolated in-process, expire after idle timeout, and are capped by `MCP_MAX_SESSIONS`.
+- If a client opts into explicit stateful sessions, they are isolated in-process, expire after idle timeout, and are capped by `MCP_MAX_SESSIONS`.
 - Oversized bodies are rejected and invalid session requests return structured JSON-RPC errors.
 
 ### Run via npx (GitHub)
@@ -157,20 +150,21 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
 
 3. Use any of the tools (e.g. `get_recent_emails`).
 
-## Available Tools (38 Total)
+## Available Tools (28 Total)
 
 **🎯 Most Popular Tools:**
 - **check_function_availability**: Check what's available and get setup guidance  
 - **test_bulk_operations**: Safely test bulk operations with dry-run mode
 - **send_email**: Full-featured email sending with proper draft/sent handling
 - **advanced_search**: Powerful multi-criteria email filtering
-- **get_recent_emails**: Quick access to recent emails from any mailbox
+- **get_recent_emails**: Quick access to recent emails from any mailbox, especially for prompts like "check email"
+- Paged email tools now return `items`, `total`, `has_more`, and `next_offset` so agents can fetch more only when needed.
 
 ### Email Tools
 
 - **list_mailboxes**: Get all mailboxes in your account
 - **list_emails**: List emails from a specific mailbox or all mailboxes
-  - Parameters: `mailboxId` (optional), `limit` (default: 20)
+  - Parameters: `mailboxId` (optional), `limit` (default: 20), `offset` (default: 0)
 - **get_email**: Get a specific email by ID
   - Parameters: `emailId` (required)
 - **send_email**: Send an email (supports threading via optional `inReplyTo` and `references` headers)
@@ -182,9 +176,9 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
 - **create_draft**: Create a minimal email draft (at least one of to/subject/body required)
   - Parameters: `to` (optional array), `cc` (optional array), `bcc` (optional array), `from` (optional), `mailboxId` (optional), `subject` (optional), `textBody` (optional), `htmlBody` (optional)
 - **search_emails**: Search emails by content
-  - Parameters: `query` (required), `limit` (default: 20)
+  - Parameters: `query` (required), `limit` (default: 20), `offset` (default: 0)
 - **get_recent_emails**: Get the most recent emails from a mailbox (inspired by JMAP-Samples top-ten)
-  - Parameters: `limit` (default: 10, max: 50), `mailboxName` (default: 'inbox')
+  - Parameters: `limit` (default: 10, max: 50), `mailboxName` (default: 'inbox'), `offset` (default: 0)
 - **mark_email_read**: Mark an email as read or unread
   - Parameters: `emailId` (required), `read` (default: true)
 - **delete_email**: Delete an email (move to trash)
@@ -203,7 +197,7 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
 - **download_attachment**: Download an email attachment. If savePath is provided, saves the file to disk and returns the file path and size. Otherwise returns a download URL.
   - Parameters: `emailId` (required), `attachmentId` (required), `savePath` (optional)
 - **advanced_search**: Advanced email search with multiple criteria
-  - Parameters: `query` (optional), `from` (optional), `to` (optional), `subject` (optional), `hasAttachment` (optional), `isUnread` (optional), `mailboxId` (optional), `after` (optional), `before` (optional), `limit` (default: 50)
+  - Parameters: `query` (optional), `from` (optional), `to` (optional), `subject` (optional), `hasAttachment` (optional), `isUnread` (optional), `mailboxId` (optional), `after` (optional), `before` (optional), `limit` (default: 20), `offset` (default: 0)
 - **get_thread**: Get all emails in a conversation thread
   - Parameters: `threadId` (required)
 
@@ -225,25 +219,6 @@ You can install this server as a Desktop Extension for Claude Desktop using the 
   - Parameters: `emailIds` (required array), `mailboxIds` (required array)
 - **bulk_remove_labels**: Remove labels from multiple emails simultaneously
   - Parameters: `emailIds` (required array), `mailboxIds` (required array)
-
-### Contact Tools
-
-- **list_contacts**: List all contacts
-  - Parameters: `limit` (default: 50)
-- **get_contact**: Get a specific contact by ID
-  - Parameters: `contactId` (required)
-- **search_contacts**: Search contacts by name or email
-  - Parameters: `query` (required), `limit` (default: 20)
-
-### Calendar Tools
-
-- **list_calendars**: List all calendars
-- **list_calendar_events**: List calendar events
-  - Parameters: `calendarId` (optional), `limit` (default: 50)
-- **get_calendar_event**: Get a specific calendar event by ID
-  - Parameters: `eventId` (required)
-- **create_calendar_event**: Create a new calendar event
-  - Parameters: `calendarId` (required), `title` (required), `description` (optional), `start` (required, ISO 8601), `end` (required, ISO 8601), `location` (optional), `participants` (optional array)
 
 ### Identity & Testing Tools
 
@@ -278,8 +253,7 @@ src/
 ├── mcp-server.ts         # MCP server factory and tool handlers
 ├── http-server.ts        # Streamable HTTP session management and limits
 ├── auth.ts              # Authentication handling
-├── jmap-client.ts       # JMAP client wrapper
-└── contacts-calendar.ts # Contacts and calendar extensions
+└── jmap-client.ts       # JMAP client wrapper with paginated email queries
 ```
 
 ### Building
@@ -311,23 +285,13 @@ Contributions are welcome! Please ensure that:
 1. **Authentication Errors**: Ensure your API token is valid and has the necessary permissions
 2. **Missing Dependencies**: Run `npm install` to ensure all dependencies are installed  
 3. **Build Errors**: Check that TypeScript compilation completes without errors using `npm run build`
-4. **Calendar/Contacts "Forbidden" Errors**: Use `check_function_availability` to see setup guidance
-5. **HTTP Session Errors**: Verify that the client is sending the `mcp-session-id` header after initialization and that the server has not expired the session due to idle timeout
-6. **Too Many Concurrent Clients**: Increase `MCP_MAX_SESSIONS` or wait for idle sessions to expire if the server returns "maximum concurrent MCP sessions reached"
+4. **Unexpectedly Large Search Results**: Use `limit` and `offset`, then follow `next_offset` only when `has_more` is true
+5. **HTTP Session Errors**: Prefer sessionless `POST` requests first; `mcp-session-id` is only needed for explicit stateful-session flows
+6. **Too Many Concurrent Clients**: Increase `MCP_MAX_SESSIONS` or wait for idle sessions to expire if you are using explicit stateful sessions and the server returns "maximum concurrent MCP sessions reached"
 
 ### Email Tools Failing with Serialization Errors?
 
 If `get_email`, `list_emails`, `search_emails`, or `advanced_search` fail with "content serialization" or "Cannot read properties of undefined" errors, upgrade to v1.7.1+. This was caused by incomplete JMAP response validation that surfaced after the MCP SDK v1.x upgrade added stricter result checking.
-
-### Calendar/Contacts Not Working?
-
-If calendar and contacts functions return "Forbidden" errors, this is likely due to:
-
-1. **Account Plan**: Calendar/contacts API may require business/professional Fastmail plans
-2. **API Token Scope**: Your API token may need calendar/contacts permissions enabled
-3. **Feature Enablement**: These features may need explicit activation in your account
-
-**Solution**: Run `check_function_availability` for step-by-step setup guidance.
 
 ### Testing Your Setup
 

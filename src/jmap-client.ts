@@ -25,6 +25,16 @@ export interface JmapResponse {
   sessionState: string;
 }
 
+export interface PaginatedResult<T> {
+  items: T[];
+  count: number;
+  offset: number;
+  limit: number;
+  total: number | null;
+  has_more: boolean;
+  next_offset: number | null;
+}
+
 export class JmapClient {
   private auth: FastmailAuth;
   private session: JmapSession | null = null;
@@ -59,6 +69,80 @@ export class JmapClient {
   protected getListResult(response: JmapResponse, index: number): any[] {
     const result = this.getMethodResult(response, index);
     return result?.list || [];
+  }
+
+  private normalizeLimit(limit: unknown, defaultLimit: number, maxLimit: number = 50): number {
+    const parsed =
+      typeof limit === 'number' ? limit : Number.parseInt(String(limit ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return defaultLimit;
+    return Math.min(parsed, maxLimit);
+  }
+
+  private normalizeOffset(offset: unknown): number {
+    const parsed =
+      typeof offset === 'number' ? offset : Number.parseInt(String(offset ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+    return parsed;
+  }
+
+  private buildPaginatedResult<T>(
+    items: T[],
+    queryResult: any,
+    requestedLimit: number,
+    requestedOffset: number,
+  ): PaginatedResult<T> {
+    const offset =
+      typeof queryResult?.position === 'number' ? queryResult.position : requestedOffset;
+    const total = typeof queryResult?.total === 'number' ? queryResult.total : null;
+    const count = items.length;
+    const hasMore = total !== null ? offset + count < total : count === requestedLimit;
+
+    return {
+      items,
+      count,
+      offset,
+      limit: requestedLimit,
+      total,
+      has_more: hasMore,
+      next_offset: hasMore ? offset + count : null,
+    };
+  }
+
+  private async queryEmails(options: {
+    filter?: Record<string, unknown>;
+    properties: string[];
+    limit?: unknown;
+    offset?: unknown;
+    defaultLimit?: number;
+  }): Promise<PaginatedResult<any>> {
+    const session = await this.getSession();
+    const limit = this.normalizeLimit(options.limit, options.defaultLimit ?? 20);
+    const offset = this.normalizeOffset(options.offset);
+
+    const request: JmapRequest = {
+      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
+      methodCalls: [
+        ['Email/query', {
+          accountId: session.accountId,
+          filter: options.filter ?? {},
+          sort: [{ property: 'receivedAt', isAscending: false }],
+          position: offset,
+          limit,
+          calculateTotal: true,
+        }, 'query'],
+        ['Email/get', {
+          accountId: session.accountId,
+          '#ids': { resultOf: 'query', name: 'Email/query', path: '/ids' },
+          properties: options.properties,
+        }, 'emails'],
+      ],
+    };
+
+    const response = await this.makeRequest(request);
+    const queryResult = this.getMethodResult(response, 0);
+    const items = this.getListResult(response, 1);
+
+    return this.buildPaginatedResult(items, queryResult, limit, offset);
   }
 
   async getSession(): Promise<JmapSession> {
@@ -134,30 +218,15 @@ export class JmapClient {
     return this.getListResult(response, 0);
   }
 
-  async getEmails(mailboxId?: string, limit: number = 20): Promise<any[]> {
-    const session = await this.getSession();
-    
+  async getEmails(mailboxId?: string, limit: number = 20, offset: number = 0): Promise<PaginatedResult<any>> {
     const filter = mailboxId ? { inMailbox: mailboxId } : {};
-    
-    const request: JmapRequest = {
-      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
-      methodCalls: [
-        ['Email/query', {
-          accountId: session.accountId,
-          filter,
-          sort: [{ property: 'receivedAt', isAscending: false }],
-          limit
-        }, 'query'],
-        ['Email/get', {
-          accountId: session.accountId,
-          '#ids': { resultOf: 'query', name: 'Email/query', path: '/ids' },
-          properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment']
-        }, 'emails']
-      ]
-    };
-
-    const response = await this.makeRequest(request);
-    return this.getListResult(response, 1);
+    return this.queryEmails({
+      filter,
+      properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment'],
+      limit,
+      offset,
+      defaultLimit: 20,
+    });
   }
 
   async getEmailById(id: string): Promise<any> {
@@ -548,9 +617,11 @@ export class JmapClient {
     return draftId;
   }
 
-  async getRecentEmails(limit: number = 10, mailboxName: string = 'inbox'): Promise<any[]> {
-    const session = await this.getSession();
-    
+  async getRecentEmails(
+    limit: number = 10,
+    mailboxName: string = 'inbox',
+    offset: number = 0,
+  ): Promise<PaginatedResult<any>> {
     // Find the specified mailbox (default to inbox)
     const mailboxes = await this.getMailboxes();
     const targetMailbox = mailboxes.find(mb => 
@@ -562,25 +633,13 @@ export class JmapClient {
       throw new Error(`Could not find mailbox: ${mailboxName}`);
     }
 
-    const request: JmapRequest = {
-      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
-      methodCalls: [
-        ['Email/query', {
-          accountId: session.accountId,
-          filter: { inMailbox: targetMailbox.id },
-          sort: [{ property: 'receivedAt', isAscending: false }],
-          limit: Math.min(limit, 50)
-        }, 'query'],
-        ['Email/get', {
-          accountId: session.accountId,
-          '#ids': { resultOf: 'query', name: 'Email/query', path: '/ids' },
-          properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment', 'keywords']
-        }, 'emails']
-      ]
-    };
-
-    const response = await this.makeRequest(request);
-    return this.getListResult(response, 1);
+    return this.queryEmails({
+      filter: { inMailbox: targetMailbox.id },
+      properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment', 'keywords'],
+      limit,
+      offset,
+      defaultLimit: 10,
+    });
   }
 
   async markEmailRead(emailId: string, read: boolean = true): Promise<void> {
@@ -917,9 +976,8 @@ export class JmapClient {
     after?: string;
     before?: string;
     limit?: number;
-  }): Promise<any[]> {
-    const session = await this.getSession();
-    
+    offset?: number;
+  }): Promise<PaginatedResult<any>> {
     // Build JMAP filter object
     const filter: any = {};
     
@@ -939,49 +997,27 @@ export class JmapClient {
       delete filter.hasKeyword;
     }
 
-    const request: JmapRequest = {
-      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
-      methodCalls: [
-        ['Email/query', {
-          accountId: session.accountId,
-          filter,
-          sort: [{ property: 'receivedAt', isAscending: false }],
-          limit: Math.min(filters.limit || 50, 100)
-        }, 'query'],
-        ['Email/get', {
-          accountId: session.accountId,
-          '#ids': { resultOf: 'query', name: 'Email/query', path: '/ids' },
-          properties: ['id', 'subject', 'from', 'to', 'cc', 'receivedAt', 'preview', 'hasAttachment', 'keywords', 'threadId']
-        }, 'emails']
-      ]
-    };
-
-    const response = await this.makeRequest(request);
-    return this.getListResult(response, 1);
+    return this.queryEmails({
+      filter,
+      properties: ['id', 'subject', 'from', 'to', 'cc', 'receivedAt', 'preview', 'hasAttachment', 'keywords', 'threadId'],
+      limit: filters.limit,
+      offset: filters.offset,
+      defaultLimit: 20,
+    });
   }
 
-  async searchEmails(query: string, limit: number = 20): Promise<any[]> {
-    const session = await this.getSession();
-
-    const request: JmapRequest = {
-      using: ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail'],
-      methodCalls: [
-        ['Email/query', {
-          accountId: session.accountId,
-          filter: { text: query },
-          sort: [{ property: 'receivedAt', isAscending: false }],
-          limit
-        }, 'query'],
-        ['Email/get', {
-          accountId: session.accountId,
-          '#ids': { resultOf: 'query', name: 'Email/query', path: '/ids' },
-          properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment']
-        }, 'emails']
-      ]
-    };
-
-    const response = await this.makeRequest(request);
-    return this.getListResult(response, 1);
+  async searchEmails(
+    query: string,
+    limit: number = 20,
+    offset: number = 0,
+  ): Promise<PaginatedResult<any>> {
+    return this.queryEmails({
+      filter: { text: query },
+      properties: ['id', 'subject', 'from', 'to', 'receivedAt', 'preview', 'hasAttachment'],
+      limit,
+      offset,
+      defaultLimit: 20,
+    });
   }
 
   async getThread(threadId: string): Promise<any[]> {

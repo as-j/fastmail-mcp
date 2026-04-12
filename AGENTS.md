@@ -14,14 +14,13 @@ tsx --test src/jmap-client.test.ts  # Run a single test file
 
 ## Architecture
 
-This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes 38 tools for interacting with the Fastmail email/contacts/calendar service via the JMAP protocol.
+This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that exposes 28 tools for interacting with Fastmail email via the JMAP protocol.
 
 ### Source Files
 
 - **`src/auth.ts`** — `FastmailAuth` class: holds API token, builds auth headers and endpoint URLs. Simple, rarely changes.
 - **`src/jmap-client.ts`** — Core JMAP client (`JmapClient` class). All email/mailbox/attachment/search operations live here. Makes JMAP method calls via `makeRequest()`, handles session bootstrapping, identity resolution, and JMAP result references (`#ids` with `resultOf` for chained calls).
-- **`src/contacts-calendar.ts`** — `ContactsCalendarClient` extends `JmapClient` with contacts (CardDAV-via-JMAP) and calendar operations. Checks for permissions before calling APIs and includes helpful error messages when unavailable.
-- **`src/mcp-server.ts`** — MCP server factory and tool handlers. Registers all 38 tools, handles request dispatch, coerces JSON-encoded string args from web clients, normalizes address arrays, and resolves Fastmail config into per-session runtime contexts.
+- **`src/mcp-server.ts`** — MCP server factory and tool handlers. Registers all 28 tools, handles request dispatch, coerces JSON-encoded string args from web clients, normalizes address arrays, and resolves Fastmail config into per-session runtime contexts.
 - **`src/http-server.ts`** — HTTP transport/session manager. Creates isolated MCP server instances per HTTP session, enforces body/session limits, expires idle sessions, and returns structured JSON-RPC errors for malformed HTTP requests.
 - **`src/index.ts`** — Startup entry point. Chooses stdio vs HTTP mode and delegates to the appropriate server bootstrap code.
 
@@ -31,7 +30,7 @@ This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server
 
 **Arg coercion in `mcp-server.ts`:** The `coerceArgs` function handles the case where web UIs send tool arguments as JSON strings instead of parsed objects. Any new tools that accept arrays or objects need to be supported there.
 
-**Per-session runtime context:** In HTTP mode, each MCP session gets its own `FastmailClientContext`, which lazily creates and caches `JmapClient` / `ContactsCalendarClient` instances. This avoids sharing one process-global Fastmail client across multiple HTTP clients.
+**Per-session runtime context:** In HTTP mode, each MCP session gets its own `FastmailClientContext`, which lazily creates and caches a `JmapClient`. This avoids sharing one process-global Fastmail client across multiple HTTP clients.
 
 **Environment variable resolution:** `mcp-server.ts` resolves `FASTMAIL_API_TOKEN` from multiple env var names (to support CLI, Docker, and DXT deployment contexts). It also detects unset placeholder values like `${FASTMAIL_API_TOKEN}` and throws a clear error.
 

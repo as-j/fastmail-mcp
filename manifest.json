@@ -2,7 +2,7 @@
   "dxt_version": "0.1",
   "name": "fastmail-mcp",
   "version": "1.8.0",
-  "description": "MCP server for Fastmail API integration",
+  "description": "Fastmail email MCP for checking inbox mail, searching messages, paging through results, sending email, replying, and drafting",
   "author": {
     "name": "Jeremy Gill"
   },

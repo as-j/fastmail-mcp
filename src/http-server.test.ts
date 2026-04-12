@@ -62,9 +62,7 @@ describe('FastmailClientContext', () => {
     const second = new FastmailClientContext(env);
 
     assert.equal(first.getMailClient(), first.getMailClient());
-    assert.equal(first.getContactsCalendarClient(), first.getContactsCalendarClient());
     assert.notEqual(first.getMailClient(), second.getMailClient());
-    assert.notEqual(first.getContactsCalendarClient(), second.getContactsCalendarClient());
   });
 });
 

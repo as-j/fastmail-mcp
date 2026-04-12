@@ -7,7 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { FastmailAuth, FastmailConfig } from './auth.js';
 import { JmapClient, EmailAddress } from './jmap-client.js';
-import { ContactsCalendarClient } from './contacts-calendar.js';
+import { TOOL_DEFINITIONS } from './tool-definitions.js';
 
 export const SERVER_INFO = {
   name: 'fastmail-mcp',
@@ -16,7 +16,6 @@ export const SERVER_INFO = {
 
 export interface McpClientContext {
   getMailClient(): JmapClient;
-  getContactsCalendarClient(): ContactsCalendarClient;
 }
 
 function normalizeAddresses(addrs: unknown): EmailAddress[] {
@@ -124,7 +123,6 @@ export class FastmailClientContext implements McpClientContext {
   private readonly env: NodeJS.ProcessEnv;
   private config: FastmailConfig | null = null;
   private jmapClient: JmapClient | null = null;
-  private contactsCalendarClient: ContactsCalendarClient | null = null;
 
   constructor(env: NodeJS.ProcessEnv = process.env) {
     this.env = env;
@@ -143,13 +141,6 @@ export class FastmailClientContext implements McpClientContext {
     }
     return this.jmapClient;
   }
-
-  getContactsCalendarClient(): ContactsCalendarClient {
-    if (!this.contactsCalendarClient) {
-      this.contactsCalendarClient = new ContactsCalendarClient(new FastmailAuth(this.getConfig()));
-    }
-    return this.contactsCalendarClient;
-  }
 }
 
 export function createRuntimeContext(env: NodeJS.ProcessEnv = process.env): McpClientContext {
@@ -166,720 +157,7 @@ export function createMcpServer(context: McpClientContext): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: [
-        {
-          name: 'list_mailboxes',
-          description: 'List all mailboxes in the Fastmail account',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'list_emails',
-          description: 'List emails from a mailbox',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              mailboxId: {
-                type: 'string',
-                description: 'ID of the mailbox to list emails from (optional, defaults to all)',
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum number of emails to return (default: 20)',
-                default: 20,
-              },
-            },
-          },
-        },
-        {
-          name: 'get_email',
-          description: 'Get a specific email by ID',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to retrieve',
-              },
-            },
-            required: ['emailId'],
-          },
-        },
-        {
-          name: 'send_email',
-          description: 'Send an email',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              to: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'Recipient addresses as [{email, name?}] objects',
-              },
-              cc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'CC addresses (optional)',
-              },
-              bcc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'BCC addresses (optional)',
-              },
-              from: {
-                type: 'string',
-                description: 'Sender email address (optional, defaults to account primary email)',
-              },
-              mailboxId: {
-                type: 'string',
-                description: 'Mailbox ID to save the email to (optional, defaults to Drafts folder)',
-              },
-              subject: {
-                type: 'string',
-                description: 'Email subject',
-              },
-              textBody: {
-                type: 'string',
-                description: 'Plain text body (optional)',
-              },
-              htmlBody: {
-                type: 'string',
-                description: 'HTML body (optional)',
-              },
-              inReplyTo: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Message-ID(s) of the email being replied to (optional, for threading)',
-              },
-              references: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Full reference chain of Message-IDs (optional, for threading)',
-              },
-            },
-            required: ['to', 'subject'],
-          },
-        },
-        {
-          name: 'reply_email',
-          description: 'Reply to an existing email with proper threading headers (In-Reply-To, References). Automatically fetches the original email to build the reply chain.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              originalEmailId: {
-                type: 'string',
-                description: 'ID of the email to reply to',
-              },
-              to: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'Recipient addresses as [{email, name?}] objects (optional, defaults to original sender)',
-              },
-              cc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'CC addresses (optional)',
-              },
-              bcc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'BCC addresses (optional)',
-              },
-              from: {
-                type: 'string',
-                description: 'Sender email address (optional, defaults to account primary email)',
-              },
-              textBody: {
-                type: 'string',
-                description: 'Plain text body (optional)',
-              },
-              htmlBody: {
-                type: 'string',
-                description: 'HTML body (optional)',
-              },
-            },
-            required: ['originalEmailId'],
-          },
-        },
-        {
-          name: 'save_draft',
-          description: 'Save an email as a draft without sending it. Supports threading headers for replies.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              to: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'Recipient addresses as [{email, name?}] objects',
-              },
-              cc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'CC addresses (optional)',
-              },
-              bcc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'BCC addresses (optional)',
-              },
-              from: {
-                type: 'string',
-                description: 'Sender email address (optional, defaults to account primary email)',
-              },
-              subject: {
-                type: 'string',
-                description: 'Email subject',
-              },
-              textBody: {
-                type: 'string',
-                description: 'Plain text body (optional)',
-              },
-              htmlBody: {
-                type: 'string',
-                description: 'HTML body (optional)',
-              },
-              inReplyTo: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Message-IDs to reply to (optional, for threading)',
-              },
-              references: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Message-IDs for References header (optional, for threading)',
-              },
-            },
-            required: ['to', 'subject'],
-          },
-        },
-        {
-          name: 'create_draft',
-          description: 'Create an email draft without sending it',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              to: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'Recipient addresses as [{email, name?}] objects (optional)',
-              },
-              cc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'CC addresses (optional)',
-              },
-              bcc: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } }, required: ['email'] } }, { type: 'string' }],
-                description: 'BCC addresses (optional)',
-              },
-              from: {
-                type: 'string',
-                description: 'Sender email address (optional, defaults to account primary email)',
-              },
-              mailboxId: {
-                type: 'string',
-                description: 'Mailbox ID to save the draft to (optional, defaults to Drafts folder)',
-              },
-              subject: {
-                type: 'string',
-                description: 'Email subject (optional)',
-              },
-              textBody: {
-                type: 'string',
-                description: 'Plain text body (optional)',
-              },
-              htmlBody: {
-                type: 'string',
-                description: 'HTML body (optional)',
-              },
-            },
-          },
-        },
-        {
-          name: 'search_emails',
-          description: 'Search emails by subject or content',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'Search query string',
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum number of results (default: 20)',
-                default: 20,
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'list_contacts',
-          description: 'List contacts from the address book',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum number of contacts to return (default: 50)',
-                default: 50,
-              },
-            },
-          },
-        },
-        {
-          name: 'get_contact',
-          description: 'Get a specific contact by ID',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              contactId: {
-                type: 'string',
-                description: 'ID of the contact to retrieve',
-              },
-            },
-            required: ['contactId'],
-          },
-        },
-        {
-          name: 'search_contacts',
-          description: 'Search contacts by name or email',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'Search query string',
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum number of results (default: 20)',
-                default: 20,
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'list_calendars',
-          description: 'List all calendars',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'list_calendar_events',
-          description: 'List events from a calendar',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              calendarId: {
-                type: 'string',
-                description: 'ID of the calendar (optional, defaults to all calendars)',
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum number of events to return (default: 50)',
-                default: 50,
-              },
-            },
-          },
-        },
-        {
-          name: 'get_calendar_event',
-          description: 'Get a specific calendar event by ID',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              eventId: {
-                type: 'string',
-                description: 'ID of the event to retrieve',
-              },
-            },
-            required: ['eventId'],
-          },
-        },
-        {
-          name: 'create_calendar_event',
-          description: 'Create a new calendar event',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              calendarId: {
-                type: 'string',
-                description: 'ID of the calendar to create the event in',
-              },
-              title: {
-                type: 'string',
-                description: 'Event title',
-              },
-              description: {
-                type: 'string',
-                description: 'Event description (optional)',
-              },
-              start: {
-                type: 'string',
-                description: 'Start time in ISO 8601 format',
-              },
-              end: {
-                type: 'string',
-                description: 'End time in ISO 8601 format',
-              },
-              location: {
-                type: 'string',
-                description: 'Event location (optional)',
-              },
-              participants: {
-                anyOf: [{ type: 'array', items: { type: 'object', properties: { email: { type: 'string' }, name: { type: 'string' } } } }, { type: 'string' }],
-                description: 'Event participants (optional)',
-              },
-            },
-            required: ['calendarId', 'title', 'start', 'end'],
-          },
-        },
-        {
-          name: 'list_identities',
-          description: 'List sending identities (email addresses that can be used for sending)',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'get_recent_emails',
-          description: 'Get the most recent emails from inbox (like top-ten)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Number of recent emails to retrieve (default: 10, max: 50)',
-                default: 10,
-              },
-              mailboxName: {
-                type: 'string',
-                description: 'Mailbox to search (default: inbox)',
-                default: 'inbox',
-              },
-            },
-          },
-        },
-        {
-          name: 'mark_email_read',
-          description: 'Mark an email as read or unread',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to mark',
-              },
-              read: {
-                anyOf: [{ type: 'boolean' }, { type: 'string' }],
-                description: 'true to mark as read, false to mark as unread',
-                default: true,
-              },
-            },
-            required: ['emailId'],
-          },
-        },
-        {
-          name: 'delete_email',
-          description: 'Delete an email (move to trash)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to delete',
-              },
-            },
-            required: ['emailId'],
-          },
-        },
-        {
-          name: 'move_email',
-          description: 'Move an email to a different mailbox',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to move',
-              },
-              targetMailboxId: {
-                type: 'string',
-                description: 'ID of the target mailbox',
-              },
-            },
-            required: ['emailId', 'targetMailboxId'],
-          },
-        },
-        {
-          name: 'add_labels',
-          description: 'Add labels (mailboxes) to an email without removing existing ones',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to add labels to',
-              },
-              mailboxIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of mailbox IDs to add as labels',
-              },
-            },
-            required: ['emailId', 'mailboxIds'],
-          },
-        },
-        {
-          name: 'remove_labels',
-          description: 'Remove specific labels (mailboxes) from an email',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email to remove labels from',
-              },
-              mailboxIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of mailbox IDs to remove as labels',
-              },
-            },
-            required: ['emailId', 'mailboxIds'],
-          },
-        },
-        {
-          name: 'get_email_attachments',
-          description: 'Get list of attachments for an email',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email',
-              },
-            },
-            required: ['emailId'],
-          },
-        },
-        {
-          name: 'download_attachment',
-          description: 'Download an email attachment. If savePath is provided, saves the file to disk and returns the file path and size. Otherwise returns a download URL.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailId: {
-                type: 'string',
-                description: 'ID of the email',
-              },
-              attachmentId: {
-                type: 'string',
-                description: 'ID of the attachment',
-              },
-              savePath: {
-                type: 'string',
-                description: 'Absolute file path to save the attachment to. Parent directories will be created automatically.',
-              },
-            },
-            required: ['emailId', 'attachmentId'],
-          },
-        },
-        {
-          name: 'advanced_search',
-          description: 'Advanced email search with multiple criteria',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'Text to search for in subject/body',
-              },
-              from: {
-                type: 'string',
-                description: 'Filter by sender email',
-              },
-              to: {
-                type: 'string',
-                description: 'Filter by recipient email',
-              },
-              subject: {
-                type: 'string',
-                description: 'Filter by subject',
-              },
-              hasAttachment: {
-                anyOf: [{ type: 'boolean' }, { type: 'string' }],
-                description: 'Filter emails with attachments',
-              },
-              isUnread: {
-                anyOf: [{ type: 'boolean' }, { type: 'string' }],
-                description: 'Filter unread emails',
-              },
-              mailboxId: {
-                type: 'string',
-                description: 'Search within specific mailbox',
-              },
-              after: {
-                type: 'string',
-                description: 'Emails after this date (ISO 8601)',
-              },
-              before: {
-                type: 'string',
-                description: 'Emails before this date (ISO 8601)',
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Maximum results (default: 50)',
-                default: 50,
-              },
-            },
-          },
-        },
-        {
-          name: 'get_thread',
-          description: 'Get all emails in a conversation thread',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              threadId: {
-                type: 'string',
-                description: 'ID of the thread/conversation',
-              },
-            },
-            required: ['threadId'],
-          },
-        },
-        {
-          name: 'get_mailbox_stats',
-          description: 'Get statistics for a mailbox (unread count, total emails, etc.)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              mailboxId: {
-                type: 'string',
-                description: 'ID of the mailbox (optional, defaults to all mailboxes)',
-              },
-            },
-          },
-        },
-        {
-          name: 'get_account_summary',
-          description: 'Get overall account summary with statistics',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'bulk_mark_read',
-          description: 'Mark multiple emails as read/unread',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of email IDs to mark',
-              },
-              read: {
-                anyOf: [{ type: 'boolean' }, { type: 'string' }],
-                description: 'true to mark as read, false as unread',
-                default: true,
-              },
-            },
-            required: ['emailIds'],
-          },
-        },
-        {
-          name: 'bulk_move',
-          description: 'Move multiple emails to a mailbox',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of email IDs to move',
-              },
-              targetMailboxId: {
-                type: 'string',
-                description: 'ID of target mailbox',
-              },
-            },
-            required: ['emailIds', 'targetMailboxId'],
-          },
-        },
-        {
-          name: 'bulk_delete',
-          description: 'Delete multiple emails (move to trash)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of email IDs to delete',
-              },
-            },
-            required: ['emailIds'],
-          },
-        },
-        {
-          name: 'bulk_add_labels',
-          description: 'Add labels to multiple emails simultaneously',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of email IDs to add labels to',
-              },
-              mailboxIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of mailbox IDs to add as labels',
-              },
-            },
-            required: ['emailIds', 'mailboxIds'],
-          },
-        },
-        {
-          name: 'bulk_remove_labels',
-          description: 'Remove labels from multiple emails simultaneously',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              emailIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of email IDs to remove labels from',
-              },
-              mailboxIds: {
-                anyOf: [{ type: 'array', items: { type: 'string' } }, { type: 'string' }],
-                description: 'Array of mailbox IDs to remove as labels',
-              },
-            },
-            required: ['emailIds', 'mailboxIds'],
-          },
-        },
-        {
-          name: 'check_function_availability',
-          description: 'Check which MCP functions are available based on account permissions',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'test_bulk_operations',
-          description: 'Test bulk operations by finding recent emails and performing safe operations (mark read/unread)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              dryRun: {
-                anyOf: [{ type: 'boolean' }, { type: 'string' }],
-                description: 'If true, only shows what would be done without making changes (default: true)',
-                default: true,
-              },
-              limit: {
-                anyOf: [{ type: 'number' }, { type: 'string' }],
-                description: 'Number of emails to test with (default: 3, max: 10)',
-                default: 3,
-              },
-            },
-          },
-        },
-      ],
-    };
-  });
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFINITIONS }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name } = request.params;
@@ -894,8 +172,8 @@ export function createMcpServer(context: McpClientContext): Server {
           return { content: [{ type: 'text', text: JSON.stringify(mailboxes, null, 2) }] };
         }
         case 'list_emails': {
-          const { mailboxId, limit = 20 } = args as any;
-          const emails = await client.getEmails(mailboxId, limit);
+          const { mailboxId, limit = 20, offset = 0 } = args as any;
+          const emails = await client.getEmails(mailboxId, limit, offset);
           return { content: [{ type: 'text', text: JSON.stringify(emails, null, 2) }] };
         }
         case 'get_email': {
@@ -991,66 +269,18 @@ export function createMcpServer(context: McpClientContext): Server {
           return { content: [{ type: 'text', text: `Draft created successfully. Email ID: ${emailId}` }] };
         }
         case 'search_emails': {
-          const { query, limit = 20 } = args as any;
+          const { query, limit = 20, offset = 0 } = args as any;
           if (!query) throw new McpError(ErrorCode.InvalidParams, 'query is required');
-          const emails = await client.searchEmails(query, limit);
+          const emails = await client.searchEmails(query, limit, offset);
           return { content: [{ type: 'text', text: JSON.stringify(emails, null, 2) }] };
-        }
-        case 'list_contacts': {
-          const { limit = 50 } = args as any;
-          const contacts = await context.getContactsCalendarClient().getContacts(limit);
-          return { content: [{ type: 'text', text: JSON.stringify(contacts, null, 2) }] };
-        }
-        case 'get_contact': {
-          const { contactId } = args as any;
-          if (!contactId) throw new McpError(ErrorCode.InvalidParams, 'contactId is required');
-          const contact = await context.getContactsCalendarClient().getContactById(contactId);
-          return { content: [{ type: 'text', text: JSON.stringify(contact, null, 2) }] };
-        }
-        case 'search_contacts': {
-          const { query, limit = 20 } = args as any;
-          if (!query) throw new McpError(ErrorCode.InvalidParams, 'query is required');
-          const contacts = await context.getContactsCalendarClient().searchContacts(query, limit);
-          return { content: [{ type: 'text', text: JSON.stringify(contacts, null, 2) }] };
-        }
-        case 'list_calendars': {
-          const calendars = await context.getContactsCalendarClient().getCalendars();
-          return { content: [{ type: 'text', text: JSON.stringify(calendars, null, 2) }] };
-        }
-        case 'list_calendar_events': {
-          const { calendarId, limit = 50 } = args as any;
-          const events = await context.getContactsCalendarClient().getCalendarEvents(calendarId, limit);
-          return { content: [{ type: 'text', text: JSON.stringify(events, null, 2) }] };
-        }
-        case 'get_calendar_event': {
-          const { eventId } = args as any;
-          if (!eventId) throw new McpError(ErrorCode.InvalidParams, 'eventId is required');
-          const event = await context.getContactsCalendarClient().getCalendarEventById(eventId);
-          return { content: [{ type: 'text', text: JSON.stringify(event, null, 2) }] };
-        }
-        case 'create_calendar_event': {
-          const { calendarId, title, description, start, end, location, participants } = args as any;
-          if (!calendarId || !title || !start || !end) {
-            throw new McpError(ErrorCode.InvalidParams, 'calendarId, title, start, and end are required');
-          }
-          const eventId = await context.getContactsCalendarClient().createCalendarEvent({
-            calendarId,
-            title,
-            description,
-            start,
-            end,
-            location,
-            participants,
-          });
-          return { content: [{ type: 'text', text: `Calendar event created successfully. Event ID: ${eventId}` }] };
         }
         case 'list_identities': {
           const identities = await client.getIdentities();
           return { content: [{ type: 'text', text: JSON.stringify(identities, null, 2) }] };
         }
         case 'get_recent_emails': {
-          const { limit = 10, mailboxName = 'inbox' } = args as any;
-          const emails = await client.getRecentEmails(limit, mailboxName);
+          const { limit = 10, mailboxName = 'inbox', offset = 0 } = args as any;
+          const emails = await client.getRecentEmails(limit, mailboxName, offset);
           return { content: [{ type: 'text', text: JSON.stringify(emails, null, 2) }] };
         }
         case 'mark_email_read': {
@@ -1111,8 +341,8 @@ export function createMcpServer(context: McpClientContext): Server {
           }
         }
         case 'advanced_search': {
-          const { query, from, to, subject, hasAttachment, isUnread, mailboxId, after, before, limit } = args as any;
-          const emails = await client.advancedSearch({ query, from, to, subject, hasAttachment, isUnread, mailboxId, after, before, limit });
+          const { query, from, to, subject, hasAttachment, isUnread, mailboxId, after, before, limit, offset } = args as any;
+          const emails = await client.advancedSearch({ query, from, to, subject, hasAttachment, isUnread, mailboxId, after, before, limit, offset });
           return { content: [{ type: 'text', text: JSON.stringify(emails, null, 2) }] };
         }
         case 'get_thread': {
@@ -1191,38 +421,6 @@ export function createMcpServer(context: McpClientContext): Server {
               available: true,
               functions: ['list_identities'],
             },
-            contacts: {
-              available: !!session.capabilities['urn:ietf:params:jmap:contacts'],
-              functions: ['list_contacts', 'get_contact', 'search_contacts'],
-              note: session.capabilities['urn:ietf:params:jmap:contacts']
-                ? 'Contacts are available'
-                : 'Contacts access not available - may require enabling in Fastmail account settings',
-              enablementGuide: session.capabilities['urn:ietf:params:jmap:contacts'] ? null : {
-                steps: [
-                  '1. Log into Fastmail web interface',
-                  '2. Go to Settings → Privacy & Security → Connected Apps & API tokens',
-                  '3. Check if contacts scope is enabled for your API token',
-                  '4. If not available, you may need to upgrade your Fastmail plan or contact support',
-                ],
-                documentation: 'https://www.fastmail.com/help/technical/jmap-api.html',
-              },
-            },
-            calendar: {
-              available: !!session.capabilities['urn:ietf:params:jmap:calendars'],
-              functions: ['list_calendars', 'list_calendar_events', 'get_calendar_event', 'create_calendar_event'],
-              note: session.capabilities['urn:ietf:params:jmap:calendars']
-                ? 'Calendar is available'
-                : 'Calendar access not available - may require enabling in Fastmail account settings',
-              enablementGuide: session.capabilities['urn:ietf:params:jmap:calendars'] ? null : {
-                steps: [
-                  '1. Log into Fastmail web interface',
-                  '2. Go to Settings → Privacy & Security → Connected Apps & API tokens',
-                  '3. Check if calendar scope is enabled for your API token',
-                  '4. If not available, you may need to upgrade your Fastmail plan or contact support',
-                ],
-                documentation: 'https://www.fastmail.com/help/technical/jmap-api.html',
-              },
-            },
             capabilities: Object.keys(session.capabilities),
           };
           return { content: [{ type: 'text', text: JSON.stringify(availability, null, 2) }] };
@@ -1231,7 +429,7 @@ export function createMcpServer(context: McpClientContext): Server {
           const { dryRun = true, limit = 3 } = args as any;
           const testLimit = Math.min(Math.max(limit, 1), 10);
           const emails = await client.getRecentEmails(testLimit, 'inbox');
-          if (emails.length === 0) {
+          if (emails.items.length === 0) {
             return {
               content: [
                 {
@@ -1241,7 +439,7 @@ export function createMcpServer(context: McpClientContext): Server {
               ],
             };
           }
-          const emailIds = emails.slice(0, testLimit).map((email) => email.id);
+          const emailIds = emails.items.slice(0, testLimit).map((email) => email.id);
           const operations = [
             {
               name: 'bulk_mark_read',
@@ -1255,7 +453,7 @@ export function createMcpServer(context: McpClientContext): Server {
             },
           ];
           const results = {
-            testEmails: emails.map((email) => ({
+            testEmails: emails.items.map((email) => ({
               id: email.id,
               subject: email.subject,
               from: email.from?.[0]?.email || 'unknown',

@@ -269,34 +269,49 @@ describe('JMAP response validation', () => {
   });
 });
 
-describe('searchEmails', () => {
+describe('paginated email queries', () => {
   let client: JmapClient;
 
   beforeEach(() => {
     client = makeClient();
   });
 
-  it('returns email list on success', async () => {
+  it('returns paginated search results on success', async () => {
     stubMakeRequest(client, {
       methodResponses: [
-        ['Email/query', { ids: ['e1'] }, 'query'],
+        ['Email/query', { ids: ['e1'], position: 0, total: 3 }, 'query'],
         ['Email/get', { list: [{ id: 'e1', subject: 'Test' }] }, 'emails'],
       ],
     });
     const results = await client.searchEmails('test', 10);
-    assert.equal(results.length, 1);
-    assert.equal(results[0].subject, 'Test');
+    assert.deepEqual(results, {
+      items: [{ id: 'e1', subject: 'Test' }],
+      count: 1,
+      offset: 0,
+      limit: 10,
+      total: 3,
+      has_more: true,
+      next_offset: 1,
+    });
   });
 
-  it('returns empty array when no results', async () => {
+  it('returns empty paginated results when no matches exist', async () => {
     stubMakeRequest(client, {
       methodResponses: [
-        ['Email/query', { ids: [] }, 'query'],
+        ['Email/query', { ids: [], position: 0, total: 0 }, 'query'],
         ['Email/get', { list: [] }, 'emails'],
       ],
     });
     const results = await client.searchEmails('nonexistent');
-    assert.deepEqual(results, []);
+    assert.deepEqual(results, {
+      items: [],
+      count: 0,
+      offset: 0,
+      limit: 20,
+      total: 0,
+      has_more: false,
+      next_offset: null,
+    });
   });
 
   it('throws on JMAP error in query', async () => {
@@ -313,5 +328,87 @@ describe('searchEmails', () => {
         return true;
       },
     );
+  });
+
+  it('sends position and calculateTotal for list_emails and clamps limit/offset', async () => {
+    const makeReq = mock.method(client, 'makeRequest', async () => ({
+      methodResponses: [
+        ['Email/query', { ids: ['e1'], position: 0, total: 1 }, 'query'],
+        ['Email/get', { list: [{ id: 'e1', subject: 'Test' }] }, 'emails'],
+      ],
+    }));
+
+    await client.getEmails('mb-123', 999, -10 as any);
+
+    assert.equal(makeReq.mock.calls.length, 1);
+    const request = makeReq.mock.calls[0].arguments[0];
+    const query = request.methodCalls[0][1];
+
+    assert.equal(query.filter.inMailbox, 'mb-123');
+    assert.equal(query.position, 0);
+    assert.equal(query.limit, 50);
+    assert.equal(query.calculateTotal, true);
+  });
+
+  it('uses mailbox lookup and offset pagination for getRecentEmails', async () => {
+    mock.method(client, 'getMailboxes', async () => [
+      { id: 'mb-inbox', name: 'Inbox', role: 'inbox' },
+    ]);
+    const makeReq = mock.method(client, 'makeRequest', async () => ({
+      methodResponses: [
+        ['Email/query', { ids: ['e2'], position: 5, total: 7 }, 'query'],
+        ['Email/get', { list: [{ id: 'e2', subject: 'Inbox item' }] }, 'emails'],
+      ],
+    }));
+
+    const results = await client.getRecentEmails(10, 'inbox', 5);
+    const query = makeReq.mock.calls[0].arguments[0].methodCalls[0][1];
+
+    assert.equal(query.filter.inMailbox, 'mb-inbox');
+    assert.equal(query.position, 5);
+    assert.deepEqual(results, {
+      items: [{ id: 'e2', subject: 'Inbox item' }],
+      count: 1,
+      offset: 5,
+      limit: 10,
+      total: 7,
+      has_more: true,
+      next_offset: 6,
+    });
+  });
+
+  it('passes advanced search filters and offset through the paginated query path', async () => {
+    const makeReq = mock.method(client, 'makeRequest', async () => ({
+      methodResponses: [
+        ['Email/query', { ids: ['e3'], position: 20, total: 21 }, 'query'],
+        ['Email/get', { list: [{ id: 'e3', subject: 'Filtered item' }] }, 'emails'],
+      ],
+    }));
+
+    const results = await client.advancedSearch({
+      query: 'invoice',
+      from: 'alice@example.com',
+      isUnread: true,
+      hasAttachment: true,
+      limit: 25,
+      offset: 20,
+    });
+
+    const query = makeReq.mock.calls[0].arguments[0].methodCalls[0][1];
+    assert.equal(query.filter.text, 'invoice');
+    assert.equal(query.filter.from, 'alice@example.com');
+    assert.equal(query.filter.hasAttachment, true);
+    assert.equal(query.filter.notKeyword, '$seen');
+    assert.equal(query.position, 20);
+    assert.equal(query.limit, 25);
+    assert.deepEqual(results, {
+      items: [{ id: 'e3', subject: 'Filtered item' }],
+      count: 1,
+      offset: 20,
+      limit: 25,
+      total: 21,
+      has_more: false,
+      next_offset: null,
+    });
   });
 });
